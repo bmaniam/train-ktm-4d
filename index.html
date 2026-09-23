@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nazrie Heat-Map Matrix</title>
+  <link rel="stylesheet" href="styles.css" />
+  <!-- SheetJS – client-side .xlsx reader, used only by the Upload Prediction
+       Analysis feature. Needs internet access on first use; the rest of the
+       app works fully offline without it. -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+
+  <!-- ===== PAGE HEADER ===== -->
+  <header class="page-header">
+    <h1>🔥 Nazrie Heat-Map Matrix</h1>
+
+    <!-- Search -->
+    <div class="search-box">
+      <input id="search-input" type="text" placeholder="Search code (e.g. 3345)…" maxlength="4" />
+      <button class="btn-primary btn-sm" id="btn-search">Search</button>
+      <button class="btn-secondary btn-sm" id="btn-clear-search">✕</button>
+    </div>
+
+    <!-- Data import: replaces the Number Pattern Matrix + Prime Code Matrix
+         with whatever's in the uploaded workbook (Heat Map sheet: columns
+         A:AD for the main matrix, AF onward for Prime Code). -->
+    <div class="upload-box">
+      <label class="btn-secondary btn-sm file-btn" for="xlsx-upload">📂 Upload Prediction Analysis</label>
+      <input type="file" id="xlsx-upload" accept=".xlsx,.xls" hidden />
+      <span id="upload-status" class="upload-status"></span>
+    </div>
+  </header>
+
+  <main class="main-content">
+
+    <!-- ===== SELECTION TABLE ===== -->
+    <section class="card selection-section" aria-label="Tier / Day selection">
+      <h2>Tier / Day Selection</h2>
+
+      <!-- Magnum results import: fills the Tier/Day table with real draws.
+           Day-1 = the first draw Magnum returns (the most recent). -->
+      <div class="fetch-bar">
+        <label for="fetch-end-date">Up to date</label>
+        <input type="date" id="fetch-end-date" />
+        <label for="fetch-count">Number of draws</label>
+        <input type="number" id="fetch-count" min="1" max="1000" value="10" />
+        <button class="btn-primary" id="btn-fetch-draws">⬇ Fetch Magnum results</button>
+        <button class="btn-secondary" id="btn-paste-toggle">Paste JSON instead</button>
+        <span id="fetch-status" class="fetch-status"></span>
+      </div>
+
+      <div id="paste-panel" class="paste-panel" hidden>
+        <p>
+          Open this address in a new browser tab, select everything (Ctrl+A), copy it, and paste it below:<br />
+          <a id="paste-link" href="#" target="_blank" rel="noopener"></a>
+        </p>
+        <textarea id="paste-json" rows="6" spellcheck="false"
+          placeholder='[{"DrawDate":"12/09/2026","DrawID":"421/26","FirstPrize":"7379", …}]'></textarea>
+        <button class="btn-primary btn-sm" id="btn-paste-load">Load pasted results</button>
+      </div>
+
+      <!-- Toolbar -->
+      <div class="toolbar">
+        <button class="btn-primary" id="btn-add-day">＋ Add Day</button>
+        <button class="btn-secondary" id="btn-edit-table">✏️ Edit Table</button>
+        <button class="btn-danger"  id="btn-clear">✕ Clear Selection</button>
+        <span style="color:#78909c;font-size:.82rem;">
+          Click or drag cells to select. Drag over selected cells to deselect.
+        </span>
+      </div>
+
+      <div class="selection-table-wrapper">
+        <!-- Rendered by renderSelectionTable() – tier rows + pattern summary rows in one table -->
+        <div id="selection-table-container"></div>
+      </div>
+    </section>
+
+    <!-- ===== STATS & LEGEND ===== -->
+    <section class="card" aria-label="Statistics and legend">
+      <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start;">
+
+        <!-- Stats -->
+        <div>
+          <h2>Statistics</h2>
+          <div class="stats-bar">
+            <div class="stat-item">
+              <span class="stat-dot" style="background:#546e7a;"></span>
+              Selected codes: <strong id="stat-selected" class="stat-count">0</strong>
+            </div>
+            <div class="stat-item">
+              <span class="stat-dot" style="background:#e53935;"></span>
+              Exact matches: <strong id="stat-exact" class="stat-count">0</strong>
+            </div>
+            <div class="stat-item">
+              <span class="stat-dot" style="background:#ffcdd2;border:1px solid #ef9a9a;"></span>
+              Surrounding: <strong id="stat-surround" class="stat-count">0</strong>
+            </div>
+          </div>
+          <!-- Per-tier breakdown -->
+          <div class="stats-bar" style="margin-top:8px;font-size:.8rem;">
+            <div class="stat-item">
+              <span class="tier-dot tier1-dot"></span>
+              Tier 1: <strong id="stat-tier1" class="stat-count">0</strong>
+            </div>
+            <div class="stat-item">
+              <span class="tier-dot tier2-dot"></span>
+              Tier 2: <strong id="stat-tier2" class="stat-count">0</strong>
+            </div>
+            <div class="stat-item">
+              <span class="tier-dot tier3-dot"></span>
+              Tier 3: <strong id="stat-tier3" class="stat-count">0</strong>
+            </div>
+          </div>
+        </div>
+
+        <!-- Legend – dynamically rendered by renderLegend() -->
+        <div>
+          <h2>Legend</h2>
+          <div id="legend-container" class="legend">
+            <div class="legend-item"><span class="legend-swatch" style="background:#e53935"></span> Exact match</div>
+            <div class="legend-item"><span class="legend-swatch" style="background:#ffcdd2;border:1px solid #ef9a9a"></span> Adjacent cell</div>
+            <div class="legend-item"><span class="legend-swatch none"></span> Unrelated</div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ===== PRIME CODE MATRIX ===== -->
+    <section class="card primecode-section" aria-label="Prime code reference matrix">
+      <h2>Prime Code Matrix</h2>
+      <p class="primecode-note" id="primecode-note">
+        Condensed reference across the prime columns (C1, C2, C6, C7, C11, C14, C15).
+        "Appear" shows how many times each code currently appears in your Tier/Day table above.
+      </p>
+      <!-- Rendered by renderPrimeCodeTable() in script.js -->
+      <div id="primecode-wrapper"></div>
+    </section>
+
+    <!-- ===== MAIN MATRIX ===== -->
+    <section class="card matrix-section" aria-label="Number pattern matrix">
+      <h2>Number Pattern Matrix</h2>
+      <!-- Rendered by renderMatrixTable() in script.js -->
+      <div id="matrix-wrapper"></div>
+    </section>
+
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>
