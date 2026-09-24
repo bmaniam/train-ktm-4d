@@ -68,6 +68,7 @@
         <button class="btn-danger"  id="btn-clear">✕ Clear Selection</button>
         <span style="color:#78909c;font-size:.82rem;">
           Click or drag cells to select. Drag over selected cells to deselect.
+          Click a TIER header to select the whole tier.
         </span>
       </div>
 
@@ -133,7 +134,7 @@
       <h2>Prime Code Matrix</h2>
       <p class="primecode-note" id="primecode-note">
         Condensed reference across the prime columns (C1, C2, C6, C7, C11, C14, C15).
-        "Appear" counts how many numbers in your Tier/Day table above are permutations of each code (e.g. 7379 counts for 3779).
+        The purple day columns follow your Tier/Day table: each shows how many of that day's numbers are permutations of the row's codes (e.g. 7379 counts for 3779). Hover a count to see which numbers.
       </p>
       <!-- Rendered by renderPrimeCodeTable() in script.js -->
       <div id="primecode-wrapper"></div>

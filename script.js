@@ -352,6 +352,7 @@ function renderSelectionTable() {
 
     dateInput.addEventListener('change', () => {
       state.dayDates[dayIdx] = dateInput.value || null;
+      renderPrimeCodeTable(); // its day columns show these dates
     });
     // Allow manual keyboard input (browser handles validation)
     dateInput.addEventListener('blur', () => {
@@ -372,6 +373,19 @@ function renderSelectionTable() {
     tierCell.colSpan = state.dayLabels.length + 1;
     tierCell.className = 'tier-header';
     tierCell.textContent = label;
+    // Clicking the header selects every number in this tier (all days);
+    // clicking again clears them. Keyboard: Enter / Space.
+    tierCell.dataset.tierHeader = tierName;
+    tierCell.tabIndex = 0;
+    tierCell.setAttribute('role', 'button');
+    tierCell.title = `Click to select all ${label} numbers (click again to clear)`;
+    tierCell.addEventListener('click', () => toggleTierSelection(tierName));
+    tierCell.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        toggleTierSelection(tierName);
+      }
+    });
 
     rows.forEach((rowData, rowIdx) => {
       const tr = tbody.insertRow();
@@ -472,30 +486,40 @@ function renderMatrixTable() {
 }
 
 /**
- * Count how many Tier/Day numbers (every tier, every day column) fall into
- * each Prime Code. Permutation-aware, like the heat map: '7379' and '9377'
- * both count towards the '3779' cell. Keyed by Prime Code – look up with
- * getPrimeCode(cell value).
- * This is the live equivalent of the spreadsheet's per-code COUNTIF against
- * a frozen block of historical draws (Prediction_Analysis.xlsx, columns
- * AP:AV) – here it re-evaluates against whatever is actually in the
- * Tier/Day table right now, so it stays correct as days are added or edited
- * instead of going stale against a fixed set of past draws.
+ * Index the Tier/Day numbers by Prime Code, overall and per day column.
+ * Permutation-aware, like the heat map: '7379' and '9377' both count
+ * towards the '3779' Prime Code.
+ *   total – Map(primeCode -> count across every day)
+ *   byDay – one Map per day column: primeCode -> [{ tier, row, value }]
+ * This is the live equivalent of the spreadsheet's per-day COUNTIF columns
+ * against past draws (Prediction_Analysis.xlsx, "R" columns) – it
+ * re-evaluates against whatever is in the Tier/Day table right now, so it
+ * stays correct as days are fetched, added or edited.
+ * One pass over the table, built once per Prime Code render.
  */
-function buildAppearanceIndex() {
-  // One pass over the Tier/Day table -> Map(primeCode -> count). Built once per
-  // Prime Code render instead of rescanning every cell per lookup, which
-  // matters once the table holds 100+ fetched draws (2,300+ codes).
-  const index = new Map();
+function buildAppearanceIndexes() {
+  const total = new Map();
+  const byDay = state.dayLabels.map(() => new Map());
   ['tier1', 'tier2', 'tier3'].forEach(tier => {
-    state.tierDayData[tier].forEach(row => {
-      row.forEach(raw => {
-        const box = getPrimeCode(normalizeCode(raw));
-        if (box) index.set(box, (index.get(box) || 0) + 1);
+    state.tierDayData[tier].forEach((row, rowIdx) => {
+      row.forEach((raw, dayIdx) => {
+        const value = normalizeCode(raw);
+        const box = getPrimeCode(value);
+        if (!box || !byDay[dayIdx]) return;
+        total.set(box, (total.get(box) || 0) + 1);
+        const dayMap = byDay[dayIdx];
+        if (!dayMap.has(box)) dayMap.set(box, []);
+        dayMap.get(box).push({ tier, row: rowIdx, value });
       });
     });
   });
-  return index;
+  return { total, byDay };
+}
+
+/** "2026-09-12" -> "12/09" for the compact day headers. */
+function shortDate(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
+  return m ? `${m[3]}/${m[2]}` : '';
 }
 
 /**
@@ -510,8 +534,11 @@ function buildAppearanceIndex() {
  * COL_HEADERS) each rendered column corresponds to, so cells carry the same
  * data-row/data-col indices the main matrix uses and the shared heat-map /
  * search logic highlights both tables from one pass.
- * An "Appear" column (and a per-cell badge) shows the live buildAppearanceIndex()
- * result – the "R/SUM" / "R" columns from the spreadsheet, recomputed live.
+ * Appearance columns (the spreadsheet's "R" / "R/SUM" columns, live):
+ *  - one column per Tier/Day day column, same order and DrawID labels, with
+ *    how many of that day's numbers are permutations of this row's codes
+ *    (hover for which numbers, and which tier they came from);
+ *  - a Total column; and a small badge on each code with its overall count.
  */
 function renderPrimeCodeTable() {
   const wrapper = document.getElementById('primecode-wrapper');
@@ -520,7 +547,7 @@ function renderPrimeCodeTable() {
   const usingUpload = Array.isArray(PRIME_ROWS);
   const colIndices  = PRIME_COL_INDICES;
   const rowCount    = usingUpload ? PRIME_ROWS.length : MATRIX_ROWS.length;
-  const appearances = buildAppearanceIndex();
+  const { total: appearances, byDay } = buildAppearanceIndexes();
 
   const table = document.createElement('table');
   table.id = 'primecode-table';
@@ -533,10 +560,18 @@ function renderPrimeCodeTable() {
     th.textContent = COL_HEADERS[colIdx] || `col${colIdx + 1}`;
     colRow.appendChild(th);
   });
-  const appearTh = document.createElement('th');
-  appearTh.textContent = 'Appear';
-  appearTh.title = 'How many times these codes appear in your current Tier/Day table';
-  colRow.appendChild(appearTh);
+  state.dayLabels.forEach((label, dayIdx) => {
+    const th = document.createElement('th');
+    th.className = 'appear-day-th' + (dayIdx === 0 ? ' appear-first' : '');
+    th.textContent = label;
+    th.title = `${label}${state.dayDates[dayIdx] ? ' · ' + state.dayDates[dayIdx] : ''}`;
+    colRow.appendChild(th);
+  });
+  const totalTh = document.createElement('th');
+  totalTh.className = 'appear-total-th';
+  totalTh.textContent = 'Total';
+  totalTh.title = 'Tier/Day numbers matching this row, across all days';
+  colRow.appendChild(totalTh);
 
   const patRow = thead.insertRow();
   patRow.className = 'pattern-row';
@@ -544,6 +579,12 @@ function renderPrimeCodeTable() {
   colIndices.forEach(colIdx => {
     const th = document.createElement('th');
     th.textContent = PATTERN_TYPES[colIdx] || '';
+    patRow.appendChild(th);
+  });
+  state.dayLabels.forEach((_, dayIdx) => {
+    const th = document.createElement('th');
+    th.className = 'appear-day-th' + (dayIdx === 0 ? ' appear-first' : '');
+    th.textContent = shortDate(state.dayDates[dayIdx]);
     patRow.appendChild(th);
   });
   patRow.appendChild(document.createElement('th'));
@@ -554,7 +595,7 @@ function renderPrimeCodeTable() {
     const labelTd = tr.insertCell();
     labelTd.textContent = (usingUpload ? PRIME_ROWS[rowIdx].label : MATRIX_ROWS[rowIdx].label) || '';
 
-    let rowTotal = 0;
+    const rowBoxes = new Set(); // distinct Prime Codes in this row, for the day columns
     colIndices.forEach((colIdx, k) => {
       const td = tr.insertCell();
       // Uploaded Prime Code cells are raw and need normalising, same as
@@ -565,8 +606,9 @@ function renderPrimeCodeTable() {
       td.dataset.row = rowIdx;
       td.dataset.col = colIdx;
       if (norm) {
-        const n = appearances.get(getPrimeCode(norm)) || 0;
-        rowTotal += n;
+        const box = getPrimeCode(norm);
+        if (box) rowBoxes.add(box);
+        const n = appearances.get(box) || 0;
         td.textContent = norm;
         if (n > 0) {
           const badge = document.createElement('sup');
@@ -577,6 +619,24 @@ function renderPrimeCodeTable() {
         }
       } else {
         td.classList.add('empty');
+      }
+    });
+
+    // One cell per day: how many of that day's numbers are permutations of
+    // any code in this row. A code repeated within the row (e.g. 1123 in both
+    // C1 and C7) is counted once, so each drawn number counts once per row.
+    let rowTotal = 0;
+    byDay.forEach((dayMap, dayIdx) => {
+      const hits = [];
+      rowBoxes.forEach(box => { if (dayMap.has(box)) hits.push(...dayMap.get(box)); });
+      const td = tr.insertCell();
+      td.className = 'appear-day' + (dayIdx === 0 ? ' appear-first' : '');
+      if (hits.length) {
+        rowTotal += hits.length;
+        td.textContent = hits.length;
+        td.classList.add(hits.length > 1 ? 'appear-day-2' : 'appear-day-1');
+        td.title = `${state.dayLabels[dayIdx]}${state.dayDates[dayIdx] ? ' (' + state.dayDates[dayIdx] + ')' : ''}: ` +
+          hits.map(h => `${h.value} – ${TIER_COLORS[h.tier].label} row ${h.row + 1} → ${getPrimeCode(h.value)}`).join('; ');
       }
     });
 
@@ -660,6 +720,45 @@ function restoreSelectionVisuals() {
       td.classList.remove('selected');
     }
   });
+  updateTierHeaderStates();
+}
+
+/** Selection keys for every cell in a tier that holds a valid 4-digit code
+ *  (blank / invalid cells are skipped – selecting them would do nothing). */
+function tierCellKeys(tier) {
+  const keys = [];
+  state.tierDayData[tier].forEach((row, rowIdx) => {
+    row.forEach((raw, dayIdx) => {
+      if (isValidCode(normalizeCode(raw))) keys.push(`${tier}-${rowIdx}-${dayIdx}`);
+    });
+  });
+  return keys;
+}
+
+/**
+ * Tier header click: select every number in the tier across all days.
+ * If the whole tier is already selected, clear it instead; if only part of
+ * it is selected, the first click completes the selection.
+ * Ignored in edit mode, where clicks are for typing (as with drag-select).
+ */
+function toggleTierSelection(tier) {
+  if (state.editMode) return;
+  const keys = tierCellKeys(tier);
+  if (!keys.length) return;
+  const allSelected = keys.every(k => state.selectedCells.has(k));
+  keys.forEach(k => (allSelected ? state.selectedCells.delete(k) : state.selectedCells.add(k)));
+  restoreSelectionVisuals();
+  recalculateHeatMap();
+}
+
+/** Mark a tier header as active when every number in that tier is selected. */
+function updateTierHeaderStates() {
+  document.querySelectorAll('#selection-table td[data-tier-header]').forEach(th => {
+    const keys = tierCellKeys(th.dataset.tierHeader);
+    const active = keys.length > 0 && keys.every(k => state.selectedCells.has(k));
+    th.classList.toggle('tier-header-active', active);
+    th.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
 }
 
 /* =====================================================================
@@ -717,7 +816,7 @@ function makeCellEditable(td) {
     recalculateHeatMap();
     updateStats();
     renderPatternSummary();
-    renderPrimeCodeTable();   // "Appear" counts depend on tierDayData, refresh
+    renderPrimeCodeTable();   // day/appearance columns depend on tierDayData, refresh
   });
 }
 
@@ -796,7 +895,7 @@ function addDay() {
 const TIER_COLORS = {
   tier1: { exact: 'exact-tier1', surround: 'surround-tier1', label: 'Tier 1', exactHex: '#e53935', surroundHex: '#ffcdd2' },
   tier2: { exact: 'exact-tier2', surround: 'surround-tier2', label: 'Tier 2', exactHex: '#1565c0', surroundHex: '#bbdefb' },
-  tier3: { exact: 'exact-tier3', surround: 'surround-tier3', label: 'Tier 3', exactHex: '#e65100', surroundHex: '#ffe0b2' },
+  tier3: { exact: 'exact-tier3', surround: 'surround-tier3', label: 'Tier 3', exactHex: '#2e7d32', surroundHex: '#c8e6c9' },
 };
 
 /**
@@ -915,6 +1014,7 @@ function recalculateHeatMap() {
 
   updateStats(byTier, exactMap, surroundMap);
   renderLegend();
+  updateTierHeaderStates(); // keeps headers right after drag-select / Clear
 }
 
 /* =====================================================================
@@ -1299,7 +1399,7 @@ function applyParsedWorkbook(parsed) {
   if (noteEl) {
     noteEl.textContent = PRIME_ROWS
       ? `Loaded from "${parsed.sheetName}": ${PRIME_COL_INDICES.map(i => COL_HEADERS[i]).join(', ')}. ` +
-        `"Appear" counts how many numbers in your Tier/Day table above are permutations of each code (e.g. 7379 counts for 3779).`
+        `The purple day columns follow your Tier/Day table: each shows how many of that day's numbers are permutations of the row's codes (e.g. 7379 counts for 3779). Hover a count to see which numbers.`
       : `No Prime Code block found in "${parsed.sheetName}" – showing the default view derived from ` +
         `the Number Pattern Matrix (C1, C2, C6, C7, C11, C14, C15).`;
   }

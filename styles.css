@@ -213,7 +213,17 @@ button:hover { opacity: .85; }
   letter-spacing: .04em;
   padding: 4px 10px;
   border: 1px solid #455a64;
+  cursor: pointer;
+  user-select: none;
+  transition: background .15s;
 }
+#selection-table .tier-header:hover { background: #455a64; }
+#selection-table .tier-header:focus-visible { outline: 2px solid #90caf9; outline-offset: -2px; }
+/* whole tier selected – header takes that tier's heat-map colour */
+#selection-table .tier-header.tier-header-active[data-tier-header="tier1"] { background: #e53935; }
+#selection-table .tier-header.tier-header-active[data-tier-header="tier2"] { background: #1565c0; }
+#selection-table .tier-header.tier-header-active[data-tier-header="tier3"] { background: #2e7d32; }
+#selection-table .tier-header.tier-header-active::after { content: '  ✓ selected'; font-weight: 400; }
 
 #selection-table td {
   border: 1px solid var(--table-border);
@@ -332,7 +342,7 @@ button:hover { opacity: .85; }
   right: 3px;
   font-size: .62rem;
   font-weight: 700;
-  color: #2e7d32;
+  color: #6a1b9a;
 }
 #primecode-table tbody td[class*="exact-"] .appear-badge,
 #primecode-table tbody td[class*="surround-"] .appear-badge {
@@ -340,15 +350,43 @@ button:hover { opacity: .85; }
   opacity: .85;
 }
 
-/* row-total "Appear" column */
+/* Appearance marks are purple – distinct from the red / blue / green tier
+   heat-map colours used in the same table. */
+
+/* per-day appearance columns (one per Tier/Day day column) */
+#primecode-table thead th.appear-day-th {
+  min-width: 42px;
+  padding: 5px 4px;
+  font-size: .72rem;
+  background: #4a148c;
+}
+#primecode-table .pattern-row th.appear-day-th {
+  background: #6a1b9a;
+  color: #e1bee7;
+  font-style: normal;
+}
+#primecode-table tbody td.appear-day {
+  min-width: 42px;
+  padding: 4px 2px;
+  font-weight: 700;
+  color: #6a1b9a;
+}
+#primecode-table tbody td.appear-day-1 { background: #f3e5f5; }
+#primecode-table tbody td.appear-day-2 { background: #ce93d8; color: #4a148c; }
+/* divider between the Prime Codes and the first day column */
+#primecode-table .appear-first { border-left: 3px solid #4a148c !important; }
+
+/* row "Total" column */
+#primecode-table thead th.appear-total-th { background: #4a148c; }
 #primecode-table tbody td.appear-cell {
   font-weight: 600;
   color: #90a4ae;
   background: #fafafa;
+  border-left: 3px solid #4a148c;
 }
 #primecode-table tbody td.appear-cell.appear-hit {
-  color: #1b5e20;
-  background: #e8f5e9;
+  color: #4a148c;
+  background: #f3e5f5;
 }
 
 /* ===== MATRIX TABLE ===== */
@@ -435,11 +473,11 @@ button:hover { opacity: .85; }
 #matrix-table tbody td.surround-tier2, #primecode-table tbody td.surround-tier2
   { background: #bbdefb !important; color: #333 !important; }
 
-/* Tier 3 – Orange */
+/* Tier 3 – Green */
 #matrix-table tbody td.exact-tier3,    #primecode-table tbody td.exact-tier3
-  { background: #e65100 !important; color: #fff !important; font-weight: 700; }
+  { background: #2e7d32 !important; color: #fff !important; font-weight: 700; }
 #matrix-table tbody td.surround-tier3, #primecode-table tbody td.surround-tier3
-  { background: #ffe0b2 !important; color: #333 !important; }
+  { background: #c8e6c9 !important; color: #333 !important; }
 
 /* exact always beats surround regardless of tier order in DOM */
 #matrix-table tbody td[class*="exact-"],
@@ -576,7 +614,7 @@ button:hover { opacity: .85; }
 }
 .tier1-dot { background: #e53935; }
 .tier2-dot { background: #1565c0; }
-.tier3-dot { background: #e65100; }
+.tier3-dot { background: #2e7d32; }
 
 /* legend groups (one per active tier) */
 .legend-group {
