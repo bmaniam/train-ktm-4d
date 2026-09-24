@@ -231,6 +231,20 @@ function isValidCode(code) {
   return /^\d{4}$/.test(code);
 }
 
+/**
+ * Prime Code (box) of a 4-digit code: its digits sorted ascending.
+ * Every permutation of a number shares one Prime Code, so the 10,000
+ * possible 4D numbers collapse into 715 boxes – the codes the matrix holds.
+ *   getPrimeCode('3142') -> '1234'
+ *   getPrimeCode('4321') -> '1234'
+ *   getPrimeCode('1123') -> '1123'
+ * Returns null for anything that isn't exactly four digits.
+ */
+function getPrimeCode(code) {
+  if (!isValidCode(code)) return null;
+  return code.split('').sort().join('');
+}
+
 /* =====================================================================
    3. STATE
    ===================================================================== */
@@ -258,11 +272,14 @@ const state = {
   }
 };
 
-/** Build the normalised matrix (array of arrays of strings|null). Rebuilt
- *  by setMatrixData() whenever a workbook is uploaded. */
-let NORM_MATRIX = MATRIX_ROWS.map(row =>
-  row.cells.map(c => normalizeCode(c))
-);
+/**
+ * NORM_MATRIX – the normalised matrix (array of arrays of strings|null).
+ * MATRIX_BOX_INDEX – Prime Code -> every matrix position whose cell has
+ * that Prime Code, so a lookup is one Map read instead of a 108 x 29 scan.
+ * Both are rebuilt by rebuildNormMatrix() whenever a workbook is uploaded.
+ */
+let NORM_MATRIX = [];
+let MATRIX_BOX_INDEX = new Map();
 
 /**
  * PRIME_ROWS – null in the default state, meaning "derive the Prime Code
@@ -278,10 +295,20 @@ let NORM_MATRIX = MATRIX_ROWS.map(row =>
 let PRIME_ROWS = null;
 let PRIME_COL_INDICES = PRIME_COLS;
 
-/** Recompute NORM_MATRIX after MATRIX_ROWS changes (e.g. on upload). */
+/** Recompute NORM_MATRIX and MATRIX_BOX_INDEX from MATRIX_ROWS. */
 function rebuildNormMatrix() {
   NORM_MATRIX = MATRIX_ROWS.map(row => row.cells.map(c => normalizeCode(c)));
+  MATRIX_BOX_INDEX = new Map();
+  NORM_MATRIX.forEach((row, ri) => {
+    row.forEach((val, ci) => {
+      const box = getPrimeCode(val);
+      if (!box) return;
+      if (!MATRIX_BOX_INDEX.has(box)) MATRIX_BOX_INDEX.set(box, []);
+      MATRIX_BOX_INDEX.get(box).push({ row: ri, col: ci });
+    });
+  });
 }
+rebuildNormMatrix();
 
 /* =====================================================================
    4. RENDERING
@@ -445,8 +472,10 @@ function renderMatrixTable() {
 }
 
 /**
- * Count how many times each normalised code currently appears among ALL
- * entered Tier/Day codes (every tier, every day column).
+ * Count how many Tier/Day numbers (every tier, every day column) fall into
+ * each Prime Code. Permutation-aware, like the heat map: '7379' and '9377'
+ * both count towards the '3779' cell. Keyed by Prime Code – look up with
+ * getPrimeCode(cell value).
  * This is the live equivalent of the spreadsheet's per-code COUNTIF against
  * a frozen block of historical draws (Prediction_Analysis.xlsx, columns
  * AP:AV) – here it re-evaluates against whatever is actually in the
@@ -454,15 +483,15 @@ function renderMatrixTable() {
  * instead of going stale against a fixed set of past draws.
  */
 function buildAppearanceIndex() {
-  // One pass over the Tier/Day table -> Map(code -> count). Built once per
+  // One pass over the Tier/Day table -> Map(primeCode -> count). Built once per
   // Prime Code render instead of rescanning every cell per lookup, which
   // matters once the table holds 100+ fetched draws (2,300+ codes).
   const index = new Map();
   ['tier1', 'tier2', 'tier3'].forEach(tier => {
     state.tierDayData[tier].forEach(row => {
       row.forEach(raw => {
-        const code = normalizeCode(raw);
-        if (code) index.set(code, (index.get(code) || 0) + 1);
+        const box = getPrimeCode(normalizeCode(raw));
+        if (box) index.set(box, (index.get(box) || 0) + 1);
       });
     });
   });
@@ -536,7 +565,7 @@ function renderPrimeCodeTable() {
       td.dataset.row = rowIdx;
       td.dataset.col = colIdx;
       if (norm) {
-        const n = appearances.get(norm) || 0;
+        const n = appearances.get(getPrimeCode(norm)) || 0;
         rowTotal += n;
         td.textContent = norm;
         if (n > 0) {
@@ -544,7 +573,7 @@ function renderPrimeCodeTable() {
           badge.className = 'appear-badge';
           badge.textContent = n;
           td.appendChild(badge);
-          td.title = `${norm} appears ${n}x in current Tier/Day codes`;
+          td.title = `${n} Tier/Day number(s) are permutations of ${norm}`;
         }
       } else {
         td.classList.add('empty');
@@ -802,17 +831,14 @@ function getSelectedCodes() {
 }
 
 /**
- * Find all matrix positions where normalised value equals `code`.
- * Returns Array<{row, col}>.
+ * Find every matrix position holding `code`'s Prime Code (box).
+ * Permutation-aware: '4321', '3142' and '1234' all return the positions of
+ * the '1234' cells, because the matrix is laid out by Prime Code, not by the
+ * individual numbers drawn. Returns Array<{row, col}> (empty for invalid codes).
  */
 function findExactMatches(code) {
-  const positions = [];
-  NORM_MATRIX.forEach((row, ri) => {
-    row.forEach((val, ci) => {
-      if (val === code) positions.push({ row: ri, col: ci });
-    });
-  });
-  return positions;
+  const box = getPrimeCode(code);
+  return box ? (MATRIX_BOX_INDEX.get(box) || []) : [];
 }
 
 /**
@@ -833,6 +859,9 @@ function getSurroundingCells(row, col) {
 
 /**
  * Full heat-map recalculation with per-tier colouring.
+ * Permutation-aware: a selected Tier/Day number (e.g. '4321') lights up its
+ * Prime Code cell in the matrix ('1234'), via findExactMatches(). The
+ * Tier/Day table itself keeps showing the number exactly as entered.
  * Priority: exact-match always beats surrounding; higher tier number beats lower
  * only for surrounding (exact match of any tier beats surrounding of any tier).
  * When two tiers share an exact match on the same cell, the first tier processed wins.
@@ -938,7 +967,7 @@ function renderLegend() {
   // If nothing selected, show generic legend
   if (activeTiers.length === 0) {
     container.innerHTML = `
-      <div class="legend-item"><span class="legend-swatch" style="background:#e53935"></span> Exact match</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:#e53935"></span> Prime Code match</div>
       <div class="legend-item"><span class="legend-swatch" style="background:#ffcdd2;border:1px solid #ef9a9a"></span> Adjacent cell</div>
       <div class="legend-item"><span class="legend-swatch none"></span> Unrelated</div>`;
     return;
@@ -950,7 +979,7 @@ function renderLegend() {
     html += `
       <div class="legend-group">
         <span class="legend-tier-label">${c.label}</span>
-        <div class="legend-item"><span class="legend-swatch" style="background:${c.exactHex}"></span> Exact match</div>
+        <div class="legend-item"><span class="legend-swatch" style="background:${c.exactHex}"></span> Prime Code match</div>
         <div class="legend-item"><span class="legend-swatch" style="background:${c.surroundHex};border:1px solid ${c.exactHex}55"></span> Adjacent</div>
       </div>`;
   });
@@ -963,8 +992,12 @@ function renderLegend() {
    10. SEARCH
    ===================================================================== */
 
-/** Search for a code and outline matching cells in both the matrix table
- *  and the Tier/Day selection table, without altering the heat-map. */
+/**
+ * Search for a code and outline matches without altering the heat-map.
+ * Permutation-aware: searching any arrangement (e.g. '2431') outlines
+ *  - its Prime Code cell ('1234') in the matrix and Prime Code tables, and
+ *  - every Tier/Day number that is a permutation of it ('1234', '4321', …).
+ */
 function handleSearch(query) {
   const matrixTable    = document.getElementById('matrix-table');
   const primeTable     = document.getElementById('primecode-table');
@@ -991,10 +1024,11 @@ function handleSearch(query) {
     });
   });
 
-  // ── Tier/Day selection table ──────────────────────────────────────────────
-  if (selectionTable) {
+  // ── Tier/Day selection table: any permutation of the searched code ───────
+  const box = getPrimeCode(norm);
+  if (selectionTable && box) {
     selectionTable.querySelectorAll('td[data-tier]').forEach(td => {
-      if (normalizeCode(td.textContent) === norm) {
+      if (getPrimeCode(normalizeCode(td.textContent)) === box) {
         td.classList.add('search-highlight');
       }
     });
@@ -1265,7 +1299,7 @@ function applyParsedWorkbook(parsed) {
   if (noteEl) {
     noteEl.textContent = PRIME_ROWS
       ? `Loaded from "${parsed.sheetName}": ${PRIME_COL_INDICES.map(i => COL_HEADERS[i]).join(', ')}. ` +
-        `"Appear" shows how many times each code currently appears in your Tier/Day table above.`
+        `"Appear" counts how many numbers in your Tier/Day table above are permutations of each code (e.g. 7379 counts for 3779).`
       : `No Prime Code block found in "${parsed.sheetName}" – showing the default view derived from ` +
         `the Number Pattern Matrix (C1, C2, C6, C7, C11, C14, C15).`;
   }

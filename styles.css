@@ -267,11 +267,11 @@ button:hover { opacity: .85; }
   max-width: 640px;
 }
 
+/* Full height – the whole table shows on the page, no inner scroll box.
+   Sideways scrolling remains only for screens narrower than the table. */
 #primecode-wrapper {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
-  max-height: 50vh;
-  overflow-y: auto;
 }
 
 #primecode-table {
@@ -354,11 +354,11 @@ button:hover { opacity: .85; }
 /* ===== MATRIX TABLE ===== */
 .matrix-section { overflow-x: auto; }
 
+/* Full height – the whole table shows on the page, no inner scroll box.
+   Sideways scrolling remains only for screens narrower than the table. */
 #matrix-wrapper {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
-  max-height: 72vh;
-  overflow-y: auto;
 }
 
 #matrix-table {
