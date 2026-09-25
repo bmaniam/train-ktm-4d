@@ -523,6 +523,23 @@ function shortDate(iso) {
 }
 
 /**
+ * Day-column indices ordered oldest -> newest by date, for the Prime Code
+ * table's day columns. Sorted by date rather than simply reversed, so the
+ * order stays right after Add Day or a date edit. Days without a date go to
+ * the right (newest end) - a freshly added day is normally the next draw.
+ * Ties and undated days keep their Tier/Day order.
+ */
+function chronologicalDayOrder() {
+  return state.dayLabels.map((_, i) => i).sort((a, b) => {
+    const da = state.dayDates[a], db = state.dayDates[b];
+    if (da && db && da !== db) return da < db ? -1 : 1; // ISO dates sort as text
+    if (da && !db) return -1;
+    if (!da && db) return 1;
+    return a - b;
+  });
+}
+
+/**
  * Build and mount the Prime Code reference table into #primecode-wrapper.
  *
  * Two data sources, chosen automatically:
@@ -535,7 +552,8 @@ function shortDate(iso) {
  * data-row/data-col indices the main matrix uses and the shared heat-map /
  * search logic highlights both tables from one pass.
  * Appearance columns (the spreadsheet's "R" / "R/SUM" columns, live):
- *  - one column per Tier/Day day column, same order and DrawID labels, with
+ *  - one column per Tier/Day day column (same DrawID labels, ordered oldest
+ *    -> newest by date via chronologicalDayOrder()), with
  *    how many of that day's numbers are permutations of this row's codes
  *    (hover for which numbers, and which tier they came from);
  *  - a Total column; and a small badge on each code with its overall count.
@@ -548,6 +566,7 @@ function renderPrimeCodeTable() {
   const colIndices  = PRIME_COL_INDICES;
   const rowCount    = usingUpload ? PRIME_ROWS.length : MATRIX_ROWS.length;
   const { total: appearances, byDay } = buildAppearanceIndexes();
+  const dayOrder = chronologicalDayOrder(); // day columns run oldest -> newest
 
   const table = document.createElement('table');
   table.id = 'primecode-table';
@@ -560,9 +579,10 @@ function renderPrimeCodeTable() {
     th.textContent = COL_HEADERS[colIdx] || `col${colIdx + 1}`;
     colRow.appendChild(th);
   });
-  state.dayLabels.forEach((label, dayIdx) => {
+  dayOrder.forEach((dayIdx, pos) => {
+    const label = state.dayLabels[dayIdx];
     const th = document.createElement('th');
-    th.className = 'appear-day-th' + (dayIdx === 0 ? ' appear-first' : '');
+    th.className = 'appear-day-th' + (pos === 0 ? ' appear-first' : '');
     th.textContent = label;
     th.title = `${label}${state.dayDates[dayIdx] ? ' · ' + state.dayDates[dayIdx] : ''}`;
     colRow.appendChild(th);
@@ -581,9 +601,9 @@ function renderPrimeCodeTable() {
     th.textContent = PATTERN_TYPES[colIdx] || '';
     patRow.appendChild(th);
   });
-  state.dayLabels.forEach((_, dayIdx) => {
+  dayOrder.forEach((dayIdx, pos) => {
     const th = document.createElement('th');
-    th.className = 'appear-day-th' + (dayIdx === 0 ? ' appear-first' : '');
+    th.className = 'appear-day-th' + (pos === 0 ? ' appear-first' : '');
     th.textContent = shortDate(state.dayDates[dayIdx]);
     patRow.appendChild(th);
   });
@@ -607,7 +627,10 @@ function renderPrimeCodeTable() {
       td.dataset.col = colIdx;
       if (norm) {
         const box = getPrimeCode(norm);
-        if (box) rowBoxes.add(box);
+        if (box) {
+          rowBoxes.add(box);
+          td.dataset.box = box; // lets a clicked count find the codes it matched
+        }
         const n = appearances.get(box) || 0;
         td.textContent = norm;
         if (n > 0) {
@@ -625,29 +648,71 @@ function renderPrimeCodeTable() {
     // One cell per day: how many of that day's numbers are permutations of
     // any code in this row. A code repeated within the row (e.g. 1123 in both
     // C1 and C7) is counted once, so each drawn number counts once per row.
+    // data-boxes on each count = the Prime Codes it matched, used by a click to
+    // highlight those codes' boxes in this row (see focusAppearance()).
     let rowTotal = 0;
-    byDay.forEach((dayMap, dayIdx) => {
+    const rowHitBoxes = new Set();
+    dayOrder.forEach((dayIdx, pos) => {
+      const dayMap = byDay[dayIdx];
       const hits = [];
-      rowBoxes.forEach(box => { if (dayMap.has(box)) hits.push(...dayMap.get(box)); });
+      const hitBoxes = [];
+      rowBoxes.forEach(box => {
+        if (dayMap.has(box)) { hits.push(...dayMap.get(box)); hitBoxes.push(box); rowHitBoxes.add(box); }
+      });
       const td = tr.insertCell();
-      td.className = 'appear-day' + (dayIdx === 0 ? ' appear-first' : '');
+      td.className = 'appear-day' + (pos === 0 ? ' appear-first' : '');
       if (hits.length) {
         rowTotal += hits.length;
         td.textContent = hits.length;
         td.classList.add(hits.length > 1 ? 'appear-day-2' : 'appear-day-1');
+        td.dataset.boxes = hitBoxes.join(',');
         td.title = `${state.dayLabels[dayIdx]}${state.dayDates[dayIdx] ? ' (' + state.dayDates[dayIdx] + ')' : ''}: ` +
-          hits.map(h => `${h.value} – ${TIER_COLORS[h.tier].label} row ${h.row + 1} → ${getPrimeCode(h.value)}`).join('; ');
+          hits.map(h => `${h.value} – ${TIER_COLORS[h.tier].label} row ${h.row + 1} → ${getPrimeCode(h.value)}`).join('; ') +
+          ' (click to highlight the code)';
       }
     });
 
     const appearTd = tr.insertCell();
     appearTd.className = 'appear-cell';
     appearTd.textContent = rowTotal > 0 ? rowTotal : '–';
-    if (rowTotal > 0) appearTd.classList.add('appear-hit');
+    if (rowTotal > 0) {
+      appearTd.classList.add('appear-hit');
+      appearTd.dataset.boxes = [...rowHitBoxes].join(',');
+      appearTd.title = 'Click to highlight every code in this row that appeared';
+    }
   }
+
+  // Click a count -> highlight the matching code boxes in its row.
+  table.addEventListener('click', e => {
+    const td = e.target.closest('td.appear-day, td.appear-cell');
+    if (td) focusAppearance(td);
+  });
 
   wrapper.innerHTML = '';
   wrapper.appendChild(table);
+}
+
+/**
+ * Highlight which Prime Code boxes a clicked count refers to: every code cell
+ * in the same row whose Prime Code is in the count's data-boxes (a code listed
+ * twice in the row lights up in both places). Clicking the same count again
+ * clears it; clicking another count moves the highlight. Counts with no hits
+ * do nothing. Uses its own classes, so heat-map colours stay visible.
+ */
+function focusAppearance(td) {
+  const table = document.getElementById('primecode-table');
+  if (!table || !td.dataset.boxes) return;
+  const wasFocused = td.classList.contains('appear-focus');
+  table.querySelectorAll('.appear-focus, .appear-source').forEach(el => {
+    el.classList.remove('appear-focus', 'appear-source');
+  });
+  if (wasFocused) return;
+
+  const boxes = new Set(td.dataset.boxes.split(','));
+  td.classList.add('appear-focus');
+  td.parentElement.querySelectorAll('td[data-box]').forEach(cell => {
+    if (boxes.has(cell.dataset.box)) cell.classList.add('appear-source');
+  });
 }
 
 /* =====================================================================
@@ -1399,7 +1464,7 @@ function applyParsedWorkbook(parsed) {
   if (noteEl) {
     noteEl.textContent = PRIME_ROWS
       ? `Loaded from "${parsed.sheetName}": ${PRIME_COL_INDICES.map(i => COL_HEADERS[i]).join(', ')}. ` +
-        `The purple day columns follow your Tier/Day table: each shows how many of that day's numbers are permutations of the row's codes (e.g. 7379 counts for 3779). Hover a count to see which numbers.`
+        `The purple day columns run from the oldest draw (left) to the newest (right); each shows how many of that day's numbers are permutations of the row's codes (e.g. 7379 counts for 3779). Hover a count to see which numbers; click it to highlight the matching code in that row.`
       : `No Prime Code block found in "${parsed.sheetName}" – showing the default view derived from ` +
         `the Number Pattern Matrix (C1, C2, C6, C7, C11, C14, C15).`;
   }

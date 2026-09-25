@@ -389,6 +389,22 @@ button:hover { opacity: .85; }
   background: #f3e5f5;
 }
 
+/* Click a count -> the code boxes it matched are highlighted. The frame is an
+   inset shadow so it shows even on heat-map-coloured cells, and doesn't clash
+   with the blue search outline. */
+#primecode-table tbody td[data-boxes] { cursor: pointer; }
+#primecode-table tbody td[data-boxes]:hover { filter: brightness(.93); }
+#primecode-table tbody td.appear-focus {
+  outline: 3px solid #4a148c;
+  outline-offset: -3px;
+}
+#primecode-table tbody td.appear-source {
+  background: #e1bee7;
+  box-shadow: inset 0 0 0 3px #6a1b9a;
+  font-weight: 700;
+  color: #4a148c;
+}
+
 /* ===== MATRIX TABLE ===== */
 .matrix-section { overflow-x: auto; }
 
