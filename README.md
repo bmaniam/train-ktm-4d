@@ -11,7 +11,7 @@ An interactive single-page heat-map website that reproduces the number-pattern m
 | `index.html` | Page structure and layout |
 | `styles.css` | All visual styling (CSS classes, no inline styles) |
 | `script.js` | All interactivity – data, rendering, heat-map logic |
-| `scripts/serve.py` | Runs the tool locally and fetches Magnum results for it |
+| `scripts/serve.py` | Runs the tool locally and fetches Magnum / Sports Toto results for it |
 | `README.md` | This file |
 
 ---
@@ -19,7 +19,7 @@ An interactive single-page heat-map website that reproduces the number-pattern m
 ## Setup (local)
 
 No build step and nothing to install. Recommended — run the helper, which also
-enables one-click **Fetch Magnum results**:
+enables one-click **Fetch results** for Magnum and Sports Toto:
 
 ```bash
 python3 scripts/serve.py
@@ -27,13 +27,15 @@ python3 scripts/serve.py
 ```
 
 Browsers don't let a page read another website's data unless that site
-allows it, and Magnum doesn't. `serve.py` serves the tool *and* fetches
-Magnum's results on its behalf, so the button works. It only forwards
-Magnum's past-results addresses and only listens on your own machine.
+allows it, and neither Magnum nor Sports Toto does. `serve.py` serves the
+tool *and* fetches their results on its behalf, so the button works. It only
+forwards Magnum's past-results addresses and Sports Toto's `4D.zip`, and
+only listens on your own machine.
 
 You can also open `index.html` directly, or serve it with
 `python -m http.server 8080`. Everything works that way except the
-automatic fetch — use **Paste JSON instead** there (see below).
+automatic fetch — use **Paste JSON instead** (Magnum) or **Load file
+instead** (Sports Toto) there (see below).
 
 ---
 
@@ -63,6 +65,36 @@ any selection.
 **Paste JSON instead** (works everywhere, no helper needed): open the
 address shown in the panel in a new tab, select all, copy, paste, and click
 **Load pasted results**.
+
+---
+
+## Loading Sports Toto results
+
+Set **Results** to **Sports Toto 4D**, pick **Up to date** and **Number of
+draws**, then click **Fetch Sports Toto results**. Sports Toto publishes its
+whole history as one file:
+
+```
+https://rst.sportstoto.com.my/upload/4D.zip
+```
+
+The tool downloads it, unzips the `4D.txt` inside (comma-separated, oldest
+draw first, newest at the bottom), keeps the draws dated on or before your
+date, and loads the last N of them — newest first, so Day-1 is the latest
+draw. The download is kept for 10 minutes, so changing the date or count
+doesn't download it again.
+
+| `4D.txt` column | Goes to |
+|---|---|
+| `DrawNo` (e.g. `618826`) | column header, shown as `6188/26` |
+| `DrawDate` (e.g. `20260920`) | the column's date picker |
+| `1stPrizeNo`, `2ndPrizeNo`, `3rdPrizeNo` | Tier 1, rows 1–3 |
+| `SpecialNo1` … `SpecialNo10` | Tier 2, rows 1–10 |
+| `ConsolationNo1` … `ConsolationNo10` | Tier 3, rows 1–10 |
+
+**Load file instead** (works everywhere, no helper needed): download
+`4D.zip` yourself and choose it — or the `4D.txt` inside it — in the panel.
+Fetch then reuses that file for other dates and counts.
 
 ---
 

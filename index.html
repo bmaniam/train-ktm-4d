@@ -39,9 +39,14 @@
     <section class="card selection-section" aria-label="Tier / Day selection">
       <h2>Tier / Day Selection</h2>
 
-      <!-- Magnum results import: fills the Tier/Day table with real draws.
-           Day-1 = the first draw Magnum returns (the most recent). -->
+      <!-- Results import: fills the Tier/Day table with real draws from
+           Magnum or Sports Toto. Day-1 = the most recent draw. -->
       <div class="fetch-bar">
+        <label for="fetch-source">Results</label>
+        <select id="fetch-source">
+          <option value="magnum">Magnum 4D</option>
+          <option value="toto">Sports Toto 4D</option>
+        </select>
         <label for="fetch-end-date">Up to date</label>
         <input type="date" id="fetch-end-date" />
         <label for="fetch-count">Number of draws</label>
@@ -59,6 +64,15 @@
         <textarea id="paste-json" rows="6" spellcheck="false"
           placeholder='[{"DrawDate":"12/09/2026","DrawID":"421/26","FirstPrize":"7379", …}]'></textarea>
         <button class="btn-primary btn-sm" id="btn-paste-load">Load pasted results</button>
+      </div>
+
+      <div id="toto-panel" class="paste-panel" hidden>
+        <p>
+          Download the Sports Toto results file, then choose it below – the
+          <code>.zip</code> as downloaded, or the <code>4D.txt</code> inside it:<br />
+          <a id="toto-link" href="https://rst.sportstoto.com.my/upload/4D.zip" target="_blank" rel="noopener">https://rst.sportstoto.com.my/upload/4D.zip</a>
+        </p>
+        <input type="file" id="toto-file" accept=".zip,.txt,.csv" />
       </div>
 
       <!-- Toolbar -->

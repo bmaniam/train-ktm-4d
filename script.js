@@ -1667,21 +1667,40 @@ async function handleFetchDraws() {
   const problem = validateFetchParams(params);
   if (problem) { setFetchStatus(problem, 'error'); return; }
 
+  const toto = currentSource() === 'toto';
   const btn = document.getElementById('btn-fetch-draws');
   btn.disabled = true;
-  setFetchStatus(`Fetching ${params.count} draw${params.count === 1 ? '' : 's'} up to ${params.endDate}…`);
+  setFetchStatus(`Fetching ${params.count} ${toto ? 'Sports Toto' : 'Magnum'} ` +
+    `draw${params.count === 1 ? '' : 's'} up to ${params.endDate}…`);
   try {
-    const draws = await fetchMagnumDraws(params.endDate, params.count);
-    setFetchStatus(describeResult(applyDrawsToTierDay(draws), 'from Magnum'), 'ok');
+    if (toto) {
+      const { draws, via } = await getTotoDraws();
+      setFetchStatus(loadTotoSelection(draws, via, params), 'ok');
+    } else {
+      const draws = await fetchMagnumDraws(params.endDate, params.count);
+      setFetchStatus(describeResult(applyDrawsToTierDay(draws), 'from Magnum'), 'ok');
+    }
   } catch (err) {
-    console.warn('Magnum fetch failed:', err.failures || err);
-    setFetchStatus(
-      'Could not fetch automatically - your browser blocks this page from reading Magnum directly. ' +
-      'Run the tool with "python3 scripts/serve.py" for one-click fetching, or use "Paste JSON instead".',
-      'error'
-    );
-    updatePasteLink();
-    document.getElementById('paste-panel').hidden = false;
+    if (!err.failures) {           // the data arrived but didn't fit, e.g. no draws that early
+      setFetchStatus(err.message, 'error');
+    } else if (toto) {
+      console.warn('Sports Toto download failed:', err.failures);
+      setFetchStatus(
+        'Could not download automatically - your browser blocks this page from reading Sports Toto directly. ' +
+        'Run the tool with "python3 scripts/serve.py" for one-click fetching, or download the file and use "Load file instead".',
+        'error'
+      );
+      document.getElementById('toto-panel').hidden = false;
+    } else {
+      console.warn('Magnum fetch failed:', err.failures);
+      setFetchStatus(
+        'Could not fetch automatically - your browser blocks this page from reading Magnum directly. ' +
+        'Run the tool with "python3 scripts/serve.py" for one-click fetching, or use "Paste JSON instead".',
+        'error'
+      );
+      updatePasteLink();
+      document.getElementById('paste-panel').hidden = false;
+    }
   } finally {
     btn.disabled = false;
   }
@@ -1698,6 +1717,204 @@ function handlePasteLoad() {
   } catch (err) {
     setFetchStatus(`Could not load pasted data: ${err.message}`, 'error');
   }
+}
+
+/* =====================================================================
+   15. SPORTS TOTO RESULTS
+   Sports Toto publishes its full 4D history as one zip holding a CSV
+   ("4D.txt"): DrawNo,DrawDate,1stPrizeNo,…,SpecialNo1-10,ConsolationNo1-10,
+   oldest draw first. There is no date-range query, so the whole file is
+   downloaded and the draws up to the chosen date are picked locally.
+   ===================================================================== */
+
+const TOTO_ZIP_URL    = 'https://rst.sportstoto.com.my/upload/4D.zip';
+const TOTO_PROXY_PATH = '/api/toto/4D.txt'; // served by scripts/serve.py (already unzipped)
+const TOTO_CACHE_MS   = 10 * 60 * 1000;     // reuse a download for 10 minutes
+let totoCache = null;                        // { draws, at, via }
+
+function currentSource() {
+  const el = document.getElementById('fetch-source');
+  return el ? el.value : 'magnum';
+}
+
+/**
+ * Read the first .txt/.csv file out of a .zip, entirely in the browser.
+ * Uses the browser's built-in DecompressionStream, so no library and no
+ * internet access are needed. Handles stored and deflated entries (what
+ * ordinary zip tools produce); throws a readable Error for anything else.
+ */
+async function readTextFromZip(buffer) {
+  const view = new DataView(buffer);
+  const bytes = new Uint8Array(buffer);
+  const decoder = new TextDecoder();
+
+  // End-of-central-directory record, searched backwards past any comment.
+  let eocd = -1;
+  for (let i = buffer.byteLength - 22; i >= Math.max(0, buffer.byteLength - 65557); i--) {
+    if (view.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('This is not a valid .zip file.');
+
+  // Central directory: find the first .txt / .csv entry.
+  const entryCount = view.getUint16(eocd + 10, true);
+  let p = view.getUint32(eocd + 16, true);
+  let entry = null;
+  for (let n = 0; n < entryCount; n++) {
+    if (view.getUint32(p, true) !== 0x02014b50) throw new Error('The .zip file is damaged.');
+    const nameLen = view.getUint16(p + 28, true);
+    const name = decoder.decode(bytes.subarray(p + 46, p + 46 + nameLen));
+    if (!entry && /\.(txt|csv)$/i.test(name)) {
+      entry = {
+        method: view.getUint16(p + 10, true),
+        size: view.getUint32(p + 20, true),         // compressed size
+        offset: view.getUint32(p + 42, true),       // local header position
+      };
+    }
+    p += 46 + nameLen + view.getUint16(p + 30, true) + view.getUint16(p + 32, true);
+  }
+  if (!entry) throw new Error('No .txt file found inside the .zip.');
+
+  const lh = entry.offset;
+  if (view.getUint32(lh, true) !== 0x04034b50) throw new Error('The .zip file is damaged.');
+  const start = lh + 30 + view.getUint16(lh + 26, true) + view.getUint16(lh + 28, true);
+  const data = bytes.subarray(start, start + entry.size);
+
+  if (entry.method === 0) return decoder.decode(data);
+  if (entry.method !== 8) throw new Error(`Unsupported compression in the .zip (method ${entry.method}).`);
+  if (typeof DecompressionStream === 'undefined') {
+    throw new Error('This browser cannot unzip files - choose the 4D.txt from inside the .zip instead.');
+  }
+  const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return new Response(stream).text();
+}
+
+/**
+ * Parse Sports Toto's 4D.txt into draw records using the same field names
+ * as Magnum's (FirstPrize, Special1…, Console1…), so both sources share
+ * applyDrawsToTierDay(). Columns are found by header name, not position.
+ * DrawNo "618826" -> DrawID "6188/26"; DrawDate "20260920" -> "20/09/2026".
+ * Returns draws oldest first.
+ */
+function parseTotoText(text) {
+  const lines = String(text).split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  if (!lines.length) throw new Error('The Sports Toto file is empty.');
+  const header = lines[0].split(',').map(h => h.trim());
+  const col = name => header.indexOf(name);
+  const fields = {
+    FirstPrize: '1stPrizeNo', SecondPrize: '2ndPrizeNo', ThirdPrize: '3rdPrizeNo',
+  };
+  for (let i = 1; i <= 10; i++) {
+    fields[`Special${i}`] = `SpecialNo${i}`;
+    fields[`Console${i}`] = `ConsolationNo${i}`;
+  }
+  const missing = ['DrawNo', 'DrawDate', ...Object.values(fields)].filter(n => col(n) < 0);
+  if (missing.length) {
+    throw new Error(`This is not a Sports Toto 4D results file (missing ${missing.slice(0, 3).join(', ')}).`);
+  }
+
+  const draws = [];
+  for (const line of lines.slice(1)) {
+    const f = line.split(',').map(v => v.trim());
+    const d = /^(\d{4})(\d{2})(\d{2})$/.exec(f[col('DrawDate')] || '');
+    if (!d) continue;
+    const no = f[col('DrawNo')] || '';
+    const rec = {
+      DrawID: /^\d{6}$/.test(no) ? `${no.slice(0, 4)}/${no.slice(4)}` : no,
+      DrawDate: `${d[3]}/${d[2]}/${d[1]}`,
+      isoDate: `${d[1]}-${d[2]}-${d[3]}`,
+    };
+    Object.entries(fields).forEach(([key, name]) => { rec[key] = f[col(name)] || ''; });
+    draws.push(rec);
+  }
+  if (!draws.length) throw new Error('No draws found in the Sports Toto file.');
+  draws.sort((a, b) => (a.isoDate < b.isoDate ? -1 : a.isoDate > b.isoDate ? 1 : 0));
+  return draws;
+}
+
+/** The last `count` draws on or before `endDate`, newest first (Day-1 = newest). */
+function selectDrawsUpTo(draws, endDate, count) {
+  const upTo = draws.filter(d => d.isoDate <= endDate);
+  if (!upTo.length) {
+    throw new Error(`No Sports Toto draws on or before ${endDate} ` +
+      `(the file covers ${draws[0].isoDate} to ${draws[draws.length - 1].isoDate}).`);
+  }
+  return upTo.slice(-count).reverse();
+}
+
+/**
+ * Get the parsed Sports Toto history: from the 10-minute cache, the local
+ * helper (already unzipped), or the zip directly (works only if the site
+ * allows cross-site requests). Throws with every attempt's reason attached.
+ */
+async function getTotoDraws() {
+  if (totoCache && Date.now() - totoCache.at < TOTO_CACHE_MS) return totoCache;
+
+  const failures = [];
+  if (location.protocol === 'http:' || location.protocol === 'https:') {
+    try {
+      const res = await fetch(TOTO_PROXY_PATH);
+      if (res.ok) {
+        totoCache = { draws: parseTotoText(await res.text()), at: Date.now(), via: 'from Sports Toto' };
+        return totoCache;
+      }
+      failures.push(`${TOTO_PROXY_PATH}: HTTP ${res.status}`);
+    } catch (err) { failures.push(`${TOTO_PROXY_PATH}: ${err.message}`); }
+  }
+  try {
+    const res = await fetch(TOTO_ZIP_URL);
+    if (res.ok) {
+      const text = await readTextFromZip(await res.arrayBuffer());
+      totoCache = { draws: parseTotoText(text), at: Date.now(), via: 'from Sports Toto' };
+      return totoCache;
+    }
+    failures.push(`${TOTO_ZIP_URL}: HTTP ${res.status}`);
+  } catch (err) { failures.push(`${TOTO_ZIP_URL}: ${err.message}`); }
+
+  const err = new Error('Could not download the Sports Toto results automatically.');
+  err.failures = failures;
+  throw err;
+}
+
+/** Pick and load the requested Toto draws; returns the status message. */
+function loadTotoSelection(draws, via, params) {
+  const picked = selectDrawsUpTo(draws, params.endDate, params.count);
+  const result = applyDrawsToTierDay(picked);
+  const range = picked.length > 1
+    ? `${picked[picked.length - 1].DrawID} – ${picked[0].DrawID}` : picked[0].DrawID;
+  const short = picked.length < params.count
+    ? ` Only ${picked.length} draw${picked.length === 1 ? ' is' : 's are'} available up to that date.` : '';
+  return describeResult(result, `${via} (${range})`) + short;
+}
+
+/** Manual path: the user picked 4D.zip or 4D.txt from their computer. */
+async function handleTotoFile(file) {
+  const params = currentFetchParams();
+  const problem = validateFetchParams(params);
+  if (problem) { setFetchStatus(problem, 'error'); return; }
+  setFetchStatus('Reading the Sports Toto file…');
+  try {
+    const buffer = await file.arrayBuffer();
+    const isZip = buffer.byteLength > 4 && new DataView(buffer).getUint32(0, true) === 0x04034b50;
+    const text = isZip ? await readTextFromZip(buffer) : new TextDecoder().decode(buffer);
+    const draws = parseTotoText(text);
+    // Keep it, so changing the date or count and clicking Fetch reuses it.
+    totoCache = { draws, at: Date.now(), via: 'from your Sports Toto file' };
+    setFetchStatus(loadTotoSelection(draws, totoCache.via, params), 'ok');
+  } catch (err) {
+    setFetchStatus(`Could not load that file: ${err.message}`, 'error');
+  }
+}
+
+/** Switch the fetch bar between Magnum and Sports Toto. */
+function applySourceUi() {
+  const toto = currentSource() === 'toto';
+  document.getElementById('btn-fetch-draws').textContent =
+    toto ? '⬇ Fetch Sports Toto results' : '⬇ Fetch Magnum results';
+  document.getElementById('btn-paste-toggle').textContent =
+    toto ? 'Load file instead' : 'Paste JSON instead';
+  document.getElementById('paste-panel').hidden = true;
+  document.getElementById('toto-panel').hidden = true;
+  setFetchStatus('');
 }
 
 /** Today's date as yyyy-mm-dd in the viewer's local time zone. */
@@ -1757,10 +1974,18 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-fetch-draws').addEventListener('click', handleFetchDraws);
   document.getElementById('btn-paste-load').addEventListener('click', handlePasteLoad);
   document.getElementById('btn-paste-toggle').addEventListener('click', () => {
-    const panel = document.getElementById('paste-panel');
+    // Magnum: paste JSON; Sports Toto: choose the downloaded 4D.zip / 4D.txt
+    const panel = document.getElementById(currentSource() === 'toto' ? 'toto-panel' : 'paste-panel');
     panel.hidden = !panel.hidden;
     updatePasteLink();
   });
+  document.getElementById('fetch-source').addEventListener('change', applySourceUi);
+  document.getElementById('toto-file').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) handleTotoFile(file);
+    e.target.value = ''; // allow choosing the same file again
+  });
+  applySourceUi();
 
   // Upload Prediction Analysis (.xlsx) → replaces the live matrix + Prime Code data
   const xlsxInput = document.getElementById('xlsx-upload');
